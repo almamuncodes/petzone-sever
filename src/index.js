@@ -35,6 +35,7 @@ async function run() {
     const db = client.db("petShopDB");
     const productsCollection = db.collection("products");
     const commentCollection = db.collection("comments");
+    const cartCollection = db.collection("cart");
 
     // GET: সব প্রোডাক্ট - search, category, petType, sort, pagination সহ
     // Usage: /api/products?search=&category=&petType=&sort=&page=&limit=
@@ -256,6 +257,158 @@ async function run() {
         });
       }
     })
+// add to cart
+app.post("/api/cart/add", async (req, res) => {
+  try {
+    const { productId, userId, quantity = 1 } = req.body; // userId যোগ করা হলো
+
+    if (!userId) {
+      return res.status(400).send({ success: false, message: "userId is required" });
+    }
+
+    const product = await productsCollection.findOne({ _id: new ObjectId(productId) });
+    if (!product) {
+      return res.status(404).send({ success: false, message: "Product not found" });
+    }
+
+    // এখন একই userId এবং productId চেক করছি
+    const existingCartItem = await cartCollection.findOne({
+      productId: new ObjectId(productId),
+      userId: userId, 
+    });
+
+    if (existingCartItem) {
+      const result = await cartCollection.updateOne(
+        { _id: existingCartItem._id },
+        { $set: { quantity: existingCartItem.quantity + quantity } }
+      );
+      return res.send({ success: true, message: "Quantity updated", cartItemId: existingCartItem._id });
+    }
+
+    const cartItem = {
+      productId: new ObjectId(productId),
+      userId: userId, // userId সেভ করছি
+      productName: product.name,
+      price: product.price,
+      quantity,
+      cut: true,
+      addedAt: new Date(),
+    };
+
+    const result = await cartCollection.insertOne(cartItem);
+    res.send({ success: true, message: "Added to cart", cartItemId: result.insertedId });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Server error" });
+  }
+});
+
+
+
+
+
+// GET: কার্টের সব প্রোডাক্ট দেখা (নির্দিষ্ট ইউজারের জন্য)
+// Usage: /api/cart?userId=your_user_id&onlySelected=true
+app.get("/api/cart", async (req, res) => {
+  try {
+    const { userId, onlySelected = false } = req.query;
+
+    if (!userId) {
+      return res.status(400).send({ success: false, message: "userId is required" });
+    }
+
+    const query = { userId: userId };
+    if (onlySelected === "true") {
+      query.cut = true;
+    }
+
+    const cartItems = await cartCollection.find(query).toArray();
+
+    // টোটাল ক্যালকুলেশন
+    const totalPrice = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const selectedItems = cartItems.filter((item) => item.cut);
+    const selectedPrice = selectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+    res.send({
+      success: true,
+      totalItems: cartItems.length,
+      selectedItems: selectedItems.length,
+      totalPrice,
+      selectedPrice,
+      cartItems,
+    });
+  } catch (error) {
+    console.error("Error fetching cart:", error);
+    res.status(500).send({ success: false, message: "Server error while fetching cart" });
+  }
+});
+
+// DELETE: কার্ট থেকে কোনো প্রোডাক্ট রিমুভ করা
+// Usage: /api/cart/:id
+app.delete("/api/cart/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid cart item ID" });
+    }
+
+    const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: "Cart item not found" });
+    }
+
+    res.send({ success: true, message: "Item removed from cart successfully" });
+  } catch (error) {
+    console.error("Error deleting cart item:", error);
+    res.status(500).send({ success: false, message: "Server error while deleting item" });
+  }
+});
+
+app.delete("/api/cart/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: "Item not found" });
+    }
+    
+    res.send({ success: true, message: "Item removed from cart" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: "Server error" });
+  }
+});
+
+// PATCH: কার্টের প্রোডাক্ট এর কুয়ান্টিটি আপডেট করা
+app.patch("/api/cart/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid cart item ID" });
+    }
+
+    const result = await cartCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { quantity: Number(quantity) } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ success: false, message: "Cart item not found" });
+    }
+
+    res.send({ success: true, message: "Quantity updated successfully" });
+  } catch (error) {
+    console.error("Error updating cart quantity:", error);
+    res.status(500).send({ success: false, message: "Server error" });
+  }
+});
+
+
+
+
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
